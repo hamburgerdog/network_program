@@ -11,22 +11,22 @@ import java.util.ArrayList;
  */
 public class op_test {
 
-    public static void main(String[] args) {
+//    public static void main(String[] args) {
 //        String question = "((1+1.231)*2-1)/123.123-10+293*680";
 //        String question = "1*6+2/(2+(3-3))+4+5*2/2";
 //        String question = "4/4-1+(1/(1*2)+2*(2-1))";
-        String question = "(4/4-1+(1/(1*2)+2*(2-1)+(1023/1023-(1002*1002)/(1002*1002)))";
-        ArrayList<String> mathToken = getMathToken(question);
-        double result = doMath(mathToken);
-        System.out.println(result);
-    }
+//        String question = "(4/4-1+(1/(1*2)+2*(2-1)+(1023/1023-(1002*1002)/(1002*1002)))";
+//        ArrayList<String> mathToken = getMathToken(question);
+//        double result = doMath(mathToken);
+//        System.out.println(result);
+//    }
 
     /**
      * 词法分析：将字符串分析成操作流
      * @param qust  输入的字符串
      * @return      操作流
      */
-    private static ArrayList<String> getMathToken(String qust){
+    static ArrayList<String> getMathToken(String qust){
         //  用数组存放解析后的字符串，数字和操作符分开处理
         ArrayList<String> token = new ArrayList<>();
         //  先将所有字符都进行分割
@@ -67,7 +67,7 @@ public class op_test {
      * @param token     输入用于操作的流
      * @return          对字符串运算的结果
      */
-    private static double doMath(ArrayList<String> token){
+    static double doMath(ArrayList<String> token){
         //  存放结果
         double result=0;
         //  运算是使用栈操作实现的，这个就是操作栈
