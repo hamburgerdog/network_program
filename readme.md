@@ -4,6 +4,7 @@
 用于存放学习java网络编程过程遇见的重难点笔记和相关代码
 
 * 对运算字符串进行识别的作业 @since2020.11.26
+* IO流 - 多线程 @since2020.11.26
 
 ## IO Stream
 
@@ -103,4 +104,160 @@
       	//	如果要使用链中多个过滤器的方法则要保证只对最后一个过滤器进行读写
     }
 ```
+
+
+
+## 线程 - 多线程编程
+
+### Future、Callable、Executor
+
+创建一个==ExecutorService==，它会根据需要创建线程，可以将其理解为一个线程池，可以向它提交Callable任务，每个任务都会得到一个Future，之后可以先Future请求得到任务的结果，如果结果未就绪轮询的线程会**阻塞**，直到任务完成。
+
+```java
+/**
+ * 实现了比较大小的Callable
+ */
+public class FindMaxInt implements Callable<Integer> {
+    private int array[];
+    private int start;
+    private int end;
+
+    public FindMaxInt(int[] array, int start, int end) {
+        this.array = array;
+        this.start = start;
+        this.end = end;
+    }
+
+    /**
+     * 回调，在Future中被get()函数所处理
+     * @return  比较结果
+     * @throws Exception
+     */
+    @Override
+    public Integer call() throws Exception {
+        int max = Integer.MIN_VALUE;
+        for (int i=start;i<end;i++){
+            max = array[i]>=max?array[i]:max;
+        }
+        return max;
+    }
+}
+
+@Test
+public void doTest(){
+  	//	array={0,1,2,3,4,5,6,7,8,9}
+    int array[] = new int[10];
+    for (int i =0;i<array.length;i++){
+      array[i]=i;
+    }
+
+    FindMaxInt findMaxInt1 = new FindMaxInt(array, 0, array.length / 2);
+    FindMaxInt findMaxInt2 = new FindMaxInt(array, array.length / 2,array.length);
+
+    //  Executor：线程池 用于通过实现Callable的类创建任务，构造一个Future来处理任务
+    ExecutorService threadPool = Executors.newFixedThreadPool(2);
+    Future<Integer> submit1 = threadPool.submit(findMaxInt1);
+    Future<Integer> submit2 = threadPool.submit(findMaxInt2);
+
+    try {
+      System.out.println(Math.max(submit1.get(),submit2.get()));
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+    } catch (ExecutionException e) {
+      e.printStackTrace();
+    }
+}
+
+  -------------------------------------------------------
+   T E S T S
+  -------------------------------------------------------
+  Running Thread.TestCallable
+  9
+```
+
+在最终结合两个`Future`的比较结果时，`submit1.get()` 和 `sb2~` 都会阻塞等待结果，只有两个线程都结束时才会比较他们的结果，并返回最大值。
+
+使用线程池的时候，使用`submit()`就可以由`Executor`去选择线程池中某一空闲的线程来调用`Runnable`接口中的`run()`，一旦能够明确确定所有任务都已进入线程中，不需再使用线程池，就应当使用`Executors.shutdown()`来显示告知线程池关闭连接，这个操作不会中止等待中的工作，可以在还有工作要完成的情况下发生，不过==应当注意在网络程序中很小这样关闭线程池，因为无法确知终点。==
+
+```java
+    /**
+     * Submits a value-returning task for execution and returns a
+     * Future representing the pending results of the task. The
+     * Future's {@code get} method will return the task's result upon
+     * successful completion.
+     *
+     * <p>
+     * If you would like to immediately block waiting
+     * for a task, you can use constructions of the form
+     * {@code result = exec.submit(aCallable).get();}
+     *
+     * <p>Note: The {@link Executors} class includes a set of methods
+     * that can convert some other common closure-like objects,
+     * for example, {@link java.security.PrivilegedAction} to
+     * {@link Callable} form so they can be submitted.
+     *
+     * @param task the task to submit
+     * @param <T> the type of the task's result
+     * @return a Future representing pending completion of the task
+     * @throws RejectedExecutionException if the task cannot be
+     *         scheduled for execution
+     * @throws NullPointerException if the task is null
+     */
+    <T> Future<T> submit(Callable<T> task);
+
+    /**
+     * Submits a Runnable task for execution and returns a Future
+     * representing that task. The Future's {@code get} method will
+     * return the given result upon successful completion.
+     *
+     * @param task the task to submit
+     * @param result the result to return
+     * @param <T> the type of the result
+     * @return a Future representing pending completion of the task
+     * @throws RejectedExecutionException if the task cannot be
+     *         scheduled for execution
+     * @throws NullPointerException if the task is null
+     */
+    <T> Future<T> submit(Runnable task, T result);
+
+    /**
+     * Submits a Runnable task for execution and returns a Future
+     * representing that task. The Future's {@code get} method will
+     * return {@code null} upon <em>successful</em> completion.
+     *
+     * @param task the task to submit
+     * @return a Future representing pending completion of the task
+     * @throws RejectedExecutionException if the task cannot be
+     *         scheduled for execution
+     * @throws NullPointerException if the task is null
+     */
+    Future<?> submit(Runnable task);
+```
+
+
+
+### 线程调度
+
+一个线程有10种方式可以暂停或者指示它准备暂停：
+
+* 可以对IO阻塞
+* 可以对同步对象阻塞
+* **可以放弃**，放弃表示线程原因暂停，让其他有相同优先级的线程有机会运行，但不会释放占有的锁，线程在放弃的时候一般不做任何的同步，在没有你要放弃的情况下，使用放弃效果不明显
+* **可以休眠**，休眠是更有力的放弃，不管有没有其他线程准备运行，休眠线程都会暂停，这样可以有效的减少低优先级线程的“饥饿”，但其和放弃一样，不会释放占用的锁，要避免在同步方法或者块内让线程休眠。唤醒是通过调用休眠线程的`interrupt()`实现的，一个线程被休眠，其Thread对象还是可以得到处理（即可以调用对象的方法和字段）。休眠进程在唤醒后会得到一个异常，随后就转入到catch块中执行
+* 可以连接另一个线程，连接线程等待被连接线程的结束，被连接线程即调用了`join()`的线程，**连接线程通常是隐式地作为当前线程存在的，没有作为参数传递给**`join()`，连接到另一个线程的线程可以被中断，如果线程被中断会跳过等待连接完成。
+* **可以等待一个对象**，通常会配合在**等待对象**上使用`notify()` `notifyall()`方法来通知**与该对象有关的线程等待结束**，因为可能有多个线程等待同一对象，在通知前一定要得到该对象的锁。一旦线程等待通知就会尝试获得该对象的锁，否则会阻塞。==一般要将`wait()`放到检查当前对象状态的循环中，不能因为线程得到了通知就认为对象一定处在正确的情况下。==
+  *有三种情况会终止`wait()`引起的睡眠：*
+  * *时间到期*
+  * *线程被中断*
+  * *对象得到通知*
+* 可以结束
+* 可以被更高优先级的线程抢占
+* 可以挂起
+* 可以停止
+
+最后两种已被舍弃，因为这会可能会让对象处于不一致状态
+
+
+
+
 
