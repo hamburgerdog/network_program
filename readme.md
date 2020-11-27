@@ -257,6 +257,91 @@ public void doTest(){
 
 最后两种已被舍弃，因为这会可能会让对象处于不一致状态
 
+## internet地址
+
+### 按IP地址查找
+
+调用`getByname()`并提供一个IP地址串做参数会创建一个internet地址对象，当实际上可能并不存在这样的主机，因为只有在`getHostName()`显式请求主机名的时候才会进行DNS检查，如果请求主机名并最终完成了一个DNS查找，但是指定IP地址的主机无法找到，那主机名也会保持为最初的字符串（即点分四段字符串），主机名比IP地址稳定很多，**从主机名创建一个新的InetAddress对象被认为是不安全的，因为这需要进行DNS查找。**
+
+**Object方法**：
+
+* `public boolean equals(Object o)`判断的时候只会对IP地址进行分析，主机名不会被解析，即意味则相同IP地址的两台机器会被认为是相等的
+* `public int hashCode()`和`equals()`一致，只会生成IP地址的哈希值
+* `public String toString()`主机名加IP地址
+
+### 多线程处理服务器日志的案例
+
+```java
+/**
+ *	处理日志的线程
+ */
+public class LookupTask implements Callable<String> {
+  
+  private String line;  
+  public LookupTask(String line) {
+    this.line = line;
+  }
+  
+  @Override
+  public String call() {
+    try {
+      // separate out the IP address
+      int index = line.indexOf(' ');
+      String address = line.substring(0, index);
+      String theRest = line.substring(index);
+      String hostname = InetAddress.getByName(address).getHostName();
+      return hostname + " " + theRest;
+    } catch (Exception ex) {
+      return line;
+    }
+  }
+}
+
+/**
+ *	主线程
+ */
+public class PooledWeblog {
+
+  private final static int NUM_THREADS = 4;	//	线程池的大小
+  
+  public static void main(String[] args) throws IOException {
+    ExecutorService executor = Executors.newFixedThreadPool(NUM_THREADS);
+    Queue<LogEntry> results = new LinkedList<LogEntry>();
+    
+    try (BufferedReader in = new BufferedReader(
+      new InputStreamReader(new FileInputStream(args[0]), "UTF-8"));) {
+      for (String entry = in.readLine(); entry != null; entry = in.readLine()) {
+        LookupTask task = new LookupTask(entry);
+        Future<String> future = executor.submit(task);
+        LogEntry result = new LogEntry(entry, future);
+        results.add(result);
+      }
+    } 
+    // Start printing the results. This blocks each time a result isn't ready.阻塞！
+    for (LogEntry result : results) {
+      try {
+        System.out.println(result.future.get());
+      } catch (InterruptedException | ExecutionException ex) {
+        System.out.println(result.original);
+      }
+    }
+    executor.shutdown();
+  }
+  
+  private static class LogEntry {
+    String original;
+    Future<String> future;
+    
+    LogEntry(String original, Future<String> future) {
+     this.original = original;
+     this.future = future;
+    }
+  }
+}
+```
+
+> 日志文件过于庞大的时候，这个程序会占用很大的内存，为了避免这个问题可以将输出也放到一个单独的线程之中，与输入共享一个队列，这样可以避免队列膨胀，但**需要有个信号告知输出线程可以运行了**
+
 
 
 
