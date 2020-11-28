@@ -5,6 +5,8 @@
 
 * 对运算字符串进行识别的作业 @since2020.11.26
 * IO流 - 多线程 @since2020.11.26
+* internet地址 @since2020.11.27
+* URL 和 URI 类 @since2020.11.28
 
 ## IO Stream
 
@@ -342,7 +344,150 @@ public class PooledWeblog {
 
 > 日志文件过于庞大的时候，这个程序会占用很大的内存，为了避免这个问题可以将输出也放到一个单独的线程之中，与输入共享一个队列，这样可以避免队列膨胀，但**需要有个信号告知输出线程可以运行了**
 
+## URL  和 URI
+
+### URL
 
 
 
+**URL由一下5个部分组成：**
+
+* 协议
+* 授权机构
+* 路径
+* 片段标识符，ref（锚点）
+* 查询字符串
+
+**有四个构造器方法：**
+
+1. String url 由字符串形式的绝对URL作为唯一参数直接生成一个URL，如果构造不成功，说明不支持这个协议，==除了能验证协议外，JAVA不会对构造的URL完成任何正确性检查==
+2. String protocol， String hostname，String file 使用该协议的默认端口号，**file参数必须加 / 开头**
+3. String protocol， String hostname，int port，String file 指定端口号
+4.  URL base，String relative 基于父URL生成相对URL
+
+**从URL获取数据：**
+
+```java
+//	四个方法都会抛出IOException
+
+//	缺点：默认获取的数据都是URL引用的原始内容，
+public InputStream openStream();
+
+//	可以和服务器直接通信，访问服务器发送的所有数据和协议的元数据:即可以访问首部信息
+public URLConnection openConnection();
+
+//	指定代理服务器
+public URLConnection openConnection(Proxy proxy);
+
+//	从服务器获取的数据首部中找Content-type字段来获取对象
+public Object getContent();
+
+//	解决getContent()难以预测获得哪种对象的问题
+public Object getContent(Class[] clazz);
+```
+
+**URL间相等性与比较**：
+
+`equals()`方法在处理主机名的时候会尝试用DNS解析，只有两个URL都指向同一个主机、端口和路径上的相同资源，而且有相同的片段标识符合查询字符串时，才认为URL是相等的，`hashCode()`也同理。为了具体比较URL标识的资源可以使用`sameFile()`，这个方法可以检查两个URL是否指向相同的资源（也包括DNS查询）。
+
+> **警告⚠️**：URL上的`equals()`可能是一个阻塞IO的操作，应当避免将URL存放到依赖该方法的结构中，如`java.util.HashMap`更好的选择方式是`java.net.URI`
+
+ `URL.toString()`生成一个绝对URL字符串，使用`toExternalForm()`打印信息更合适，该方法将一个URL对象转换为一个字符串，事实上`toString()`调用的就是该方法，最后使用`toURI()`可以将URL转换成URI，URI类提供了更精确、更符合规范的操作行为，**URL类应当主要用于从服务器中下载内容。**
+
+### URI
+
+URL对象对应网络获取应用层协议的一个表示，而URI对象纯粹用于解析和处理字符串，URI没有网络获取功能。URI从字符串中构造，其**并不依赖底层协议处理器**，只要URI语法上正确，Java就不需要理解与URI相关的协议。
+
+URI引用最多有三个部分：模式、模式特定部分和片段标识符，与URI规范不同，URI可以使用非ASCII字符，URI类中非ASCII字符不会想完成百分号的转义，这样在`getRawFoo()`这类获取URI原始编码部分的方法中，也不会得到用百分号转义后的字符，同时URI对象是不可变的，这对线程安全有帮助。
+
+**比较和相等：**相等的URI必须同为层次或者不透明的，比较模式和授权机构时不区分大小写，其余部分区分
+
+`toString()`返回URI的未边发字符串形式，无法保证这是一个语法正确的URI，这种方法适合人阅读但不适合用来获取数据，`toASCIISting()`返回URI的编码字符串，大多数时候都应该使用这种URI字符串形式。
+
+### x-www-form-urlencoded
+
+不同操作系统之间是有区别 的，web设计人员要处理这种差异，如有些操作系统允许文件名中有空格，但大部分都不允许，为了解决这类问题必须把URL使用的字符规定为必须来自ASCII的一个固定子集：
+
+* `[a-zA-z0-9-_.!~*‘(,)]`
+
+* 字符 / & ? @ ; $ + = % 也可以使用，但只能用于特殊用途，如果在路径或查询字符串中都应该被编码
+
+URL类不会自动编码和解码，因此需要使用`URLEncode`和`URLDecode`这两个类来编码解码，编码方式很简单，字符转换为字节，每个字节要写为百分号后面加两个十六进制数字，URL更部分之间的分隔符不需要编码
+
+在编码的时候必须逐个部分对URL进行编码，而不是对整个URL进行编码，通常只有路径和查询字符串需要被编码，解码是可以传入整个URL，因为解码方法对非转义字符不会进行处理
+
+```java
+public class QueryString {
+
+  private StringBuilder query = new StringBuilder();
+  
+  public QueryString() {
+  }
+
+  public synchronized void add(String name, String value) { 
+    query.append('&');
+    encode(name, value);
+  }
+  
+  private synchronized void encode(String name, String value) {
+    try { 
+      query.append(URLEncoder.encode(name, "UTF-8"));
+      query.append('='); 
+      query.append(URLEncoder.encode(value, "UTF-8"));
+    } catch (UnsupportedEncodingException ex) {
+      throw new RuntimeException("Broken VM does not support UTF-8");
+    }
+  }
+  
+  public synchronized String getQuery() {
+    return query.toString();
+  }
+  
+  @Override
+  public String toString() {
+    return getQuery();
+  }
+  
+  public static void main(String[] args) {
+    QueryString qs = new QueryString();
+    qs.add("h1", "en");
+    qs.add("as_q", "Java");
+    qs.add("as_epq", "I/O");
+    String url = "http://www.test.com/search?" + qs;
+    System.out.println(url);
+  }
+}
+```
+
+## HTTP
+
+### HTTP方法
+
+* GET，获取一个资源表示，没有副作用，如果失败可以重复执行GET
+* POST，提交表单，先服务器提交数据，要防止重复提交
+* HEAD，和GET方法相似，但不会获得请求的主体，只需要起始行和请求HTTP首部
+* PUT，和GET相似无副作用，可以重复该方法把同一个文档放在同一个服务器的同一个位置
+* DELETE，有权限安全问题
+* OPTION
+* TRACE
+
+HTTP首部中两个比较关键面字段：`Content-type`指明MIME媒体类型，`Content-length`指明主体的长度，这对传送一个二进制类型的文件而言很重要
+
+### Cookie
+
+一种用于存储连接件持久客户端状态的小文本串，cookie在请求和响应的HTTP首部，从服务器传给客户端，再从客户端传到服务器，cookie中通常不包含数据，只是指示服务器上的数据，用`CookeiManager`和`CookieStore`来管理和在本地存放和获取cookie
+
+## URLConnection
+
+URLConnection是一个抽象类，在运行时环境会根据所用的协议来创建所需的对象，使用`java.lang.Class.forName().newInstance (java7未过时)`来实例化这个类，直接使用URLConnection类的程序遵循以下步骤：
+
+1. 构造一个URL对象
+2. 调用URL对象的`openConnection()`获取一个对应的URLConnection
+3. 配置URLConnection
+4. 读取首部字段
+5. 获取输入流
+6. 获得输出流
+7. 关闭连接
+
+> **URLConnection和HTTP联系过于紧密**，默认每个传输文件前都有一个MIME首部或类型的东西
 
