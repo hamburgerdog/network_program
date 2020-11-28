@@ -7,6 +7,8 @@
 * IO流 - 多线程 @since2020.11.26
 * internet地址 @since2020.11.27
 * URL 和 URI 类 @since2020.11.28
+* HTTP @since 2020.11.28
+* URLConnection @since 2020.11.29
 
 ## IO Stream
 
@@ -479,7 +481,9 @@ HTTP首部中两个比较关键面字段：`Content-type`指明MIME媒体类型�
 
 ## URLConnection
 
-URLConnection是一个抽象类，在运行时环境会根据所用的协议来创建所需的对象，使用`java.lang.Class.forName().newInstance (java7未过时)`来实例化这个类，直接使用URLConnection类的程序遵循以下步骤：
+> **URLConnection和HTTP联系过于紧密**，默认每个传输文件前都有一个MIME首部或类型的东西
+
+URLConnection是一个抽象类，在运行时环境使用`java.lang.Class.forName().newInstance` (java7未过时的方法 )来实例化这个类，不过该抽象类中只有一个`connect()`方法需要具体的子类实现，它建立与服务器的连接，需要依赖具体的协议，直接使用URLConnection类的程序遵循以下步骤：
 
 1. 构造一个URL对象
 2. 调用URL对象的`openConnection()`获取一个对应的URLConnection
@@ -489,5 +493,28 @@ URLConnection是一个抽象类，在运行时环境会根据所用的协议来�
 6. 获得输出流
 7. 关闭连接
 
-> **URLConnection和HTTP联系过于紧密**，默认每个传输文件前都有一个MIME首部或类型的东西
+**读数据的方法**`public int getContentLength()`：
+
+HTTP服务器不总会在数据发送完后就立即关闭联系，因此在读取数据的时候不知道是何时停止读取的，要下载一个二进制文件，更可靠的方式是想获取一个文件的长度，在根据这个长度读取相应的字节数，很多服务器不会费力的为文本文件提供`content-length`首部，但是对二进制文件来说这个首部是必须的
+
+### 配置连接
+
+7个保护的实例字段
+
+[![D66YFA.png](https://s3.ax1x.com/2020/11/29/D66YFA.png)](https://imgchr.com/i/D66YFA)
+
+有对应设置和获取方法，==只能在URLConnection连接前修改这些实例字段，即实例方法必须在连接前使用==
+
+### 缓存
+
+使用GET和HTTP访问的页面通常可以缓存，HTTPS和POST的通常不缓存，客户端在请求资源的时候会询问服务器资源是否有被更新过，即如果资源的最后修改时间比客户端上一次获取资源的时间要晚则说明资源需要重新更新，或者资源缓存时间到期也需要更新。`Etag`首部就是资源改变时这个资源的唯一标识符
+
+### 流模式
+
+通常填写`content-length`需要知道主体的长度，而在写首部的时候往往不知道该值，因此JAVA会先把资源缓存，直到流关闭才可以知道该值，但当处理很长的表单时，响应的负担会很大，Java是这样解决的：
+
+1. 预先知道数据的大小，如使用PUT上传文件时可以告诉HttpURLConnection对象文件大小
+2. 分块，请求主体以多个部分发送，这样需要再连接URL之前将分块大小告知连接
+
+这两种方式对身份认证和重定向有一定的影响，除非确实有必要，否则不要使用流模式
 
