@@ -352,7 +352,7 @@ public class PooledWeblog {
 
 > 日志文件过于庞大的时候，这个程序会占用很大的内存，为了避免这个问题可以将输出也放到一个单独的线程之中，与输入共享一个队列，这样可以避免队列膨胀，但**需要有个信号告知输出线程可以运行了**
 
-## URL  和 URI
+## URL 和 URI
 
 ### URL
 
@@ -1601,3 +1601,253 @@ public class RequestProcessor implements Runnable {
 
 ## 非阻塞I/O
 
+用于减少多线程的使用，可以减少创建线程和切换线程造成的不必要的开销，使用NIO会增加体系结构的复杂性，使用多线程会简单很多，这很难对两者的优劣性作出判断。
+
+非阻塞IO的重点就是**对缓冲区的操作、与通道搭配使用、还有**`Selector`**选择器**，即选择一个准备好的通道进行操作。
+
+### 缓冲区 buffer
+
+在nio模型中，所有数据都要进行缓存，缓冲区可能是字节数组，原始实现也可能直接将缓冲区与硬件或者内存连接。流和通道的区别是：流是一个字节一个字节读取的（即使提供了byte[]，原理还是基于字节的），而通道是基于块的，要传送的字节必须都存放在缓冲区中。
+
+每个缓冲区都有四个关键信息，且无论缓冲区是何种类型都提供了这四种信息的查询：
+
+* **位置**  缓冲区中要读写的下一个位置，以0起始，最大值等于缓冲区大小
+* **容量**  缓冲区可保存的元素最大容量
+* **限度**  缓冲区当前可访问的数据的末尾位置
+* **标记**  通过`mark()`可以标记当前位置 `reset()`用于清空标记
+
+读取缓冲区不会对数据造成任何影响，只会改变缓冲区的位置。我们可以通过`allocate()`创建一个基于数组的缓冲区，**缓冲区是基于继承的，不是基于多态的**，要处理的元素如果是IntBuffer、CharBuffer、ByteBuffer等类型(基本类型都提供buffer缓存类型)，都要用某种类型的缓冲区的工厂方法来创建缓冲区，而不是使用超类buffer。
+
+基于数组的缓冲区可以使用`array()`&`arrayOffset()`来返回数组，但这实际上暴露了私有数据，要谨慎使用，而且在返回数组后必须二选一，即只对缓冲区或者只对数组进行操作，防止出现问题。
+
+`allocateDirect()`可以直接分配内存区，而不基于数组，这里无法返回数组，但是和硬件或者内存联系紧密，可以大大提高数据的读写速度。
+
+每种类型的缓冲区都提供了一些常用方法来对缓冲区进行操作：
+
+* `clear()`将位置设为0，并把限度设成容量，从而将缓冲区“清空”，后续数据会直接覆盖老数据
+* `rewind()`将位置设成0，但不改变限度，主要用于==写完数据后读取缓冲区==
+* `flip()`将限度设置成当前位置，写完数据后方便读取。
+* `hasRemaining()`&`remaining()`用于返回缓冲区当前位置和限度之间的元素数量
+
+**填空和排出**
+
+缓冲区是为顺序访问而设计的，每个缓冲区都有一个当前位置（`position()`），从缓冲区读取或者写入一个元素时，缓冲区的位置都为+1
+
+* `put()` 缓冲区最多可以填充到其容量大小
+* `get()` 从缓冲区读取数据，空数据则为null(\u0000)
+  * 这两个方法都有批量方法，可以用现有的字节数组或者子数组填充和排空
+  * 还有绝对方法，即传入两个参数，第一个参数为index，第二个参数为元素，绝对方法不会改变位置，因此顺序不会有影响
+* 数据转换方法：`getChar() putChar() getShort() putShort()` ....
+
+#### 视图缓冲区
+
+如果知道从通道中读取的缓冲区中只包含一种类型的元素，则可以使用视图缓冲区，它从当前维持住开始由底层提取数据，对视图缓冲区的操作会反映到底层缓冲区，每个缓冲区都有自己独立的信息
+
+* `public abstract ShortBuffer asShortBuffer()`
+* `public abstract CharBuffer asCharBuffer()`
+* `public abstract IntBuffer asIntBuffer()`
+* `public abstract LongBuffer asLongBuffer()`
+* `public abstract FloatBuffer asFloatBuffer()`
+* `public abstract DoubleBuffer asDoubleBuffer()`
+
+完全可以使用视图来填充和排空缓冲区，但**数据必须使用原始的**`ByteBuffer`**对通道进行读写**，通道只能读写原始类型的方法，**两个缓冲区有两套独立的信息**，必须分别考虑，而且非阻塞模式不能保证缓冲区在排空后能以int、double、float等类型边界对齐，**向非阻塞通道写入一个int的半个字节是有可能的**，在向视图放入更多数据前，应当检查这个问题
+
+#### 压缩缓冲区
+
+大多数缓冲区都支持`compact()`方法用来对数据进行复制前的压缩，即对缓冲区中的数据进行写出，然后剩余的数据移到缓冲区的开头，同时缓冲区的位置设成剩余数据的尾部，可以继续写入数据，这对复制很有帮助（读取一个缓冲区，写入到另一个缓冲区中）
+
+#### 复制缓冲区
+
+建立缓冲区副本可以用来将相同的信息发送到多个独立的通道之中，除了long类型，其他六种特定类型(Byte Int Char Short Float Double)缓冲区都提供了一个`duplicate()`来共享相同的数据，初始和复制缓冲区有两套独立的位置，一个缓冲区可以超强或者落后于另一缓冲区，但这个方法只用于读取数据，如果修改了共享的数据，会难以追踪数据在哪里发生了修改。
+
+**分片缓冲区**
+
+这六种特定类型的缓冲区还提供了一个`slice()`来提供一个分片缓冲区，即起始位置是原缓冲区的当前位置而容量是限度，子序列只能看到当前位置到限度的所有元素
+
+#### 缓冲区的Object方法
+
+`equals()`只有满足以下条件的时候才认为两个缓冲区是相等的：（<u>*`hashCode()`同理*</u>）
+
+* 缓冲区要具有相同的类型
+* 缓冲区中剩余的元素个数相同
+* 相同位置上的剩余元素彼此相等
+
+:warning:==相等性并不考虑缓冲区中位置之前的元素，也不考虑缓冲区的容量、限度和标记==
+
+### 通道
+
+> 通道将缓冲区的数据移入移出到各种IO源，如文件、socket、数据报等`
+>
+> 对于网络编程有三个重要的通道类：`SocketChannel ServerSocketChannel DatagramChannel`
+
+```java
+//	实例非阻塞IO的服务器
+import java.nio.*;
+import java.nio.channels.*;
+import java.net.*;
+import java.util.*;
+import java.io.IOException;
+
+public class ChargenServer {
+    
+  public static int DEFAULT_PORT = 19;
+  
+  public static void main(String[] args) {
+  
+    int port;
+    try {
+      port = Integer.parseInt(args[0]);
+    } catch (RuntimeException ex) {
+      port = DEFAULT_PORT;   
+    }
+    System.out.println("Listening for connections on port " + port);
+
+    byte[] rotation = new byte[95*2];
+    for (byte i = ' '; i <= '~'; i++) {
+      rotation[i -' '] = i;    
+      rotation[i + 95 - ' '] = i;    
+    }
+    
+    ServerSocketChannel serverChannel;
+    Selector selector;
+    try {
+      serverChannel = ServerSocketChannel.open();
+      //	可以简写为 serverChannel.bind(new InetSocketAddress(port))
+      ServerSocket ss = serverChannel.socket();
+      InetSocketAddress address = new InetSocketAddress(port);
+      ss.bind(address);
+      serverChannel.configureBlocking(false);
+      selector = Selector.open();
+      serverChannel.register(selector, SelectionKey.OP_ACCEPT);
+    } catch (IOException ex) {
+      ex.printStackTrace();
+      return;   
+    }
+    
+    while (true) {
+      try {
+        selector.select();
+      } catch (IOException ex) {
+        ex.printStackTrace();
+        break;
+      }
+        
+      Set<SelectionKey> readyKeys = selector.selectedKeys();
+      Iterator<SelectionKey> iterator = readyKeys.iterator();
+      while (iterator.hasNext()) {
+        
+        SelectionKey key = iterator.next();
+        iterator.remove();
+        try {
+          if (key.isAcceptable()) {
+            ServerSocketChannel server = (ServerSocketChannel) key.channel();
+            SocketChannel client = server.accept();
+            System.out.println("Accepted connection from " + client);
+            client.configureBlocking(false);
+            SelectionKey key2 = client.register(selector, SelectionKey.
+                                                                    OP_WRITE);
+            ByteBuffer buffer = ByteBuffer.allocate(74);
+            buffer.put(rotation, 0, 72);
+            buffer.put((byte) '\r');
+            buffer.put((byte) '\n');
+            buffer.flip();
+            key2.attach(buffer);
+          } else if (key.isWritable()) {
+            SocketChannel client = (SocketChannel) key.channel();
+            ByteBuffer buffer = (ByteBuffer) key.attachment();
+            if (!buffer.hasRemaining()) {
+              // Refill the buffer with the next line
+              buffer.rewind(); 
+              // Get the old first character
+              int first = buffer.get();
+              // Get ready to change the data in the buffer
+              buffer.rewind();
+              // Find the new first characters position in rotation
+              int position = first - ' ' + 1;
+              // copy the data from rotation into the buffer
+              buffer.put(rotation, position, 72);
+              // Store a line break at the end of the buffer
+              buffer.put((byte) '\r');
+              buffer.put((byte) '\n');
+              // Prepare the buffer for writing
+              buffer.flip();
+            }
+            client.write(buffer);
+          }
+        } catch (IOException ex) {
+          key.cancel();
+          try {
+            key.channel().close();
+          }
+          catch (IOException cex) {}
+        }
+      }
+    }
+  }
+}
+```
+
+#### SocketChannel 
+
+SocketChannel 类没有任何公共构造函数，要使用两个静态`open()`方法来创建SocketChannel对象，使用带参数的构造器会阻塞来建立连接，使用无参版本不立即连接，它创建一个初始未连接的socket必须通过`connect()`才会连接，要用非阻塞方法打开通道就应该用无参构造器，在程序实际使用连接前要记得调用`finishConnect`方法来保证连接已经建立。
+
+读取SocketChannel，要用`pubilc abstract int read(ByteBuffer dst) throws IOException`，因此要先建立一个字节缓冲区，通道会用尽可能多的数据填充缓冲区。写入同理，Socket通道在一般情况下都是全双工的，将通道写到多个缓冲区叫散步，而将多个缓冲区的数据写入通道叫聚集，就像正常的Socket一样，用完通道后要关闭，释放使用的端口和资源。
+
+#### ServerSocketChannel
+
+这个类只有一个目的就是为了接受入站连接，无法读取、写入或者连接ServerSocketChannel，其`accept()`方法最重要。`ServerSocketChannel.open()`用于新建一个ServerSocketChannel对象，然后通过该对象的`socket()`方法获得一个ServerSocket
+
+```java
+try	{
+  ServerSocketChannel server = ServerSocketChannel.open();
+  ServerSocket socket = server.socket();	//	可直接忽略，用bind方法时自动创建socket
+  SocketAddress address = new SocketAddress(port)
+  socket.bind(address);
+}catch(IOException e){
+  ....
+}
+```
+
+接受连接`accept()`可以有阻塞方式和非阻塞方式执行，在非阻塞方式下，如果没有入站连接则会返回null，非阻塞模式一般和Selector结合使用，设置非阻塞莫送出需要先将ServerSocketChannel的`configureBlocking()`传入false
+
+### Channels
+
+这是一个简单的工具类，可以将基于IO的流、阅读器和书写器包装到通道中，同理可以反向从通道中获取流、阅读器和书写器。
+
+### 异步通道
+
+AsynchronousSocketChannel 和 AsynchronousServerSocketChannel 类，这两个类是读写异步通道，其会立刻返回，甚至在IO完成前就会返回，所读写的数据由一个Future 或 CompletionHandler 进一步处理，这里不使用选择器
+
+### Selector
+
+Selector只能通过工厂类来获得新的构造器:`Selectors.open()`
+
+然后向选择器增加通道，`public finally SelectionKey register(Selector sel, int pos)`
+
+sel是要通道向哪个选择器组成，该方法是在SelectableChannel类中声明的，不是所有通道都是可选择的
+
+pos是标志整型常量，用于选择操作类型：
+
+* SelectionKey.OP_ACCEPT
+* SelectionKey.OP_CONNECT
+* SelectionKey.OP_READ
+* SelectionKey.OP_WRITE
+
+还有一个重载的方法可以添加一个附件，用来附加一个流或者通道
+
+选择就绪通道也有三个方法：
+
+* `public abstract int selectNow() throws IOException`
+  * 方法不阻塞，如果没有准备好的会立刻返回
+* `public abstract int select() throws IOException`
+  * 方法阻塞，一直等待到至少有通道可用
+* `public abstract int select(long timeout) throws IOException`
+  * 方法阻塞，等待一定时间
+
+如果通道已经就绪可用`selectdeKeys()`来获取就绪通道，其返回一个 `Set<selectionKey>`
+
+处理这个集合的时候可以从迭代器中删除这个键，告知选择器改键已经被处理
+
+### SelectionKey
+
+这个对象相当于通道的指针，一个通道可以注册到多个选择器中，获取到一个SelectionKey后要确定这些键能够进行什么样的操作：`isAccept() isConnectable() isReadable() isWritable()`一旦了解到相关的通道准备完成何种操作就可以用`channel()`来获取通道，获取`SelectionKey`存储的对象可以用`attachment()`方法，结束时取消连接用`cancel()`方法来撤销注册，但当关闭通道的时候会自动在所在的选择器中撤销注册，关闭选择器同理
